@@ -1,4 +1,4 @@
-
+##### This is the working one! ######################
 import logging
 import click
 import time
@@ -14,9 +14,10 @@ from gym.wrappers import Monitor
 from common.wrappers import ScaledStateWrapper
 from common.env.pamdp_env import boatEnv
 
-def evaluate(env, agent, episodes=1000):
+def evaluate(env, agent, episodes=100):
     returns = []
     timesteps = []
+    success_count = 0
     for _ in range(episodes):
         state, _ = env.reset()
         terminal = False
@@ -26,31 +27,41 @@ def evaluate(env, agent, episodes=1000):
             t += 1
             state = np.array(state, dtype=np.float32, copy=False)
             action = agent.act(state)
-            (state, _), reward, terminal, _ = env.step(action)
+            (state, _), reward, terminal, info = env.step(action)
+            
             total_reward += reward
+        if info['success']:
+            success_count += 1
         timesteps.append(t)
         returns.append(total_reward)
 
-    return np.array(returns)
+    return np.array(returns),np.array(timesteps),success_count/episodes
 
 
 @click.command()
 @click.option('--seed', default=7, help='Random seed.', type=int)
-@click.option('--episodes', default=2000000, help='Number of epsiodes.', type=int)
+@click.option('--episodes', default=2e6, help='Number of epsiodes.', type=int)
+@click.option('--env_name', default="boatcong", help='environment name', type=str)
 @click.option('--evaluation-episodes', default=100, help='Episodes over which to evaluate after training.', type=int)
 @click.option('--parameter-rollouts', default=25, help='Number of rollouts per parameter update.', type=int)  # default 50, 25 best
 @click.option('--scale', default=False, help='Scale inputs and actions.', type=bool)
 @click.option('--initialise-params', default=True, help='Initialise action parameters.', type=bool)
 @click.option('--save-dir', default="results/boat", help='Output directory.', type=str)
 @click.option('--title', default="QPAMDP", help="Prefix of output files", type=str)
-def run(seed, episodes, evaluation_episodes, parameter_rollouts, scale, initialise_params, save_dir, title):
+def run(seed, episodes, env_name, evaluation_episodes, parameter_rollouts, scale, initialise_params, save_dir, title):
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
     alpha_param = 1.0
     variances = [0.1, 0.1, 0.01]
     initial_params = [3., 10., 400.]
-    env = boatEnv(choice = 1, testmode=1)
+    if env_name == "boatcong":
+        env = boatEnv(testmode=1,choice=1)
+    elif env_name == "boatincong0":
+        env = boatEnv(testmode=0,choice=0,km=0)
+    elif env_name == "boatincong1":
+        env = boatEnv(testmode=0,choice=0,km=1)
+    # env = boatEnv(choice = 1, testmode=1,km=1)
     dir = os.path.join(save_dir, title)
     if scale:
         env = ScaledStateWrapper(env)
@@ -72,7 +83,7 @@ def run(seed, episodes, evaluation_episodes, parameter_rollouts, scale, initiali
                                       gamma=0.999, temperature=1.0, cooling=0.995, lmbda=0.5, order=6,
                                       scale_alpha=True, use_softmax=True, seed=seed,
                                       observation_index=act_obs_index, gamma_step_adjust=True)
-    agent = QPAMDPAgent(env.observation_space.spaces[0], env.action_space, env_name = "boat", alpha=alpha_param,
+    agent = QPAMDPAgent(env.observation_space.spaces[0], env.action_space, env_name = env_name, alpha=alpha_param,
                         initial_action_learning_episodes=10000, seed=seed, action_obs_index=act_obs_index,
                         parameter_obs_index=param_obs_index, action_relearn_episodes=1000, variances=variances,
                         parameter_updates=180, parameter_rollouts=parameter_rollouts, norm_grad=False,
@@ -100,9 +111,9 @@ def run(seed, episodes, evaluation_episodes, parameter_rollouts, scale, initiali
         agent.variances = 0
         agent.discrete_agent.epsilon = 0.
         agent.discrete_agent.temperature = 0.
-        evaluation_returns = evaluate(env, agent, evaluation_episodes)
+        evaluation_returns,timesteps_eval,succ_rate_eval = evaluate(env, agent, evaluation_episodes)
         print("Ave. evaluation return =", sum(evaluation_returns) / len(evaluation_returns))
-        print("Ave. evaluation prob. =", sum(evaluation_returns == 50.) / len(evaluation_returns))
+        print("Ave. evaluation success prob. =", succ_rate_eval)
         np.save(os.path.join(dir, title + "{}e".format(str(seed))), evaluation_returns)
 
 
